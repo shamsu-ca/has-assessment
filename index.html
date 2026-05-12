@@ -388,7 +388,11 @@ tbody td{padding:11px 14px;vertical-align:middle;color:var(--text);font-weight:5
 // ════════════════════════════════════════════════
 //  CONFIG — paste your GAS Web App URL here
 // ════════════════════════════════════════════════
-var API_URL = "https://script.googleusercontent.com/macros/echo?user_content_key=AUkAhnQL7NSe745srL_nDS78taiqdAzUiT9VMp6HA9ohv2Cw9zER4lNtBs7ytJ9QfD1ro6gQRgL8J0wWYhycceELaAES3_nHASPFhOt9cEyhdnZTg4w7Vq5GHHsvkakFwx4BQsFwCHWAcyimnyuFboxS-xFzP3sRDmUp4Y3VLwDyZULMNFPvvpVkKeyxGhxjz_7is_8K7mhBG5woBbIuxC0-NKs695txNMkt6_xKLDV8TIEtU9HjgPB-UVpjQ02j-rYzWz4xNzf0-YWJ_AQa0WJnehR-iDi9dg&lib=M57CKBJ4rTSHrcig6Qj6PbmUP4ktCuX3R";
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  REQUIRED: paste your GAS Web App URL below                  ║
+// ║  Extensions → Apps Script → Deploy → Web App → Copy URL     ║
+// ╚══════════════════════════════════════════════════════════════╝
+var API_URL = "https://script.googleusercontent.com/macros/echo?user_content_key=AUkAhnS80FqxhBGrI0jRhV4qhN4D18PQ7SpZpRqA14X_kcfOkpZVafZRqrA4oSvZU_ubzImfNbAm7lTZmKbuWFfkl_V102nO-24HIo3p26ppHGydvOCih2f_W40cKLlbd_AXt47gYYre0FDhafpV_bn6q0xZIqPctiHwnmYjdNZXQ9jPsrnQziXm6AXjcCmdYob4HQ_XZWMElMi_bq4P5wXpSlPePbgO3bMrTKNgKoiMOnvuDDyOBTtRuRD1T7Xo2LelbW07GRMYbvEZy77KsXB3wgE5_1lNiA&lib=M57CKBJ4rTSHrcig6Qj6PbmUP4ktCuX3R";
 
 // ════════════════════════════════════════════════
 //  VIEW ROUTER
@@ -435,6 +439,13 @@ function buildBeh(){var c=document.getElementById("beh-list");c.innerHTML="";BF.
 //  INIT
 // ════════════════════════════════════════════════
 document.addEventListener("DOMContentLoaded",function(){
+  // Guard: warn if API_URL was never configured
+  if(API_URL.indexOf("YOUR_DEPLOYMENT_ID")>-1){
+    var w=document.createElement("div");
+    w.style.cssText="position:fixed;top:0;left:0;right:0;z-index:9999;background:#EF4444;color:#fff;padding:14px 20px;font-size:13px;font-weight:700;text-align:center;font-family:monospace";
+    w.textContent="⚠ API_URL not configured — open index.html and replace YOUR_DEPLOYMENT_ID with your GAS Web App URL";
+    document.body.prepend(w);
+  }
   document.getElementById("dob").max=new Date().toISOString().split("T")[0];
   buildLang("lang-english","eng");buildLang("lang-arabic","ar");buildLang("lang-malayalam","ml");
   buildRW("rw-math",MATH,"math");buildRW("rw-reasoning",RSN,"rsn");
@@ -619,13 +630,23 @@ function deleteRecord(){
 
 // ════════════════════════════════════════════════
 //  API HELPER
+//  GAS needs text/plain + redirect:follow
 // ════════════════════════════════════════════════
 function api(body){
   return fetch(API_URL,{
     method:"POST",
-    headers:{"Content-Type":"text/plain"},
+    redirect:"follow",
+    headers:{"Content-Type":"text/plain;charset=utf-8"},
     body:JSON.stringify(body)
-  }).then(function(r){return r.json();});
+  })
+  .then(function(r){
+    var ct=r.headers.get("content-type")||"";
+    if(ct.indexOf("json")>-1) return r.json();
+    return r.text().then(function(t){
+      try{return JSON.parse(t);}
+      catch(_){throw new Error("Bad response: "+t.slice(0,120));}
+    });
+  });
 }
 
 // ════════════════════════════════════════════════
