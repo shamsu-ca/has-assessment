@@ -1,0 +1,788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>HAS Academy — Assessment Audit Console</title>
+<meta name="robots" content="noindex,nofollow"/>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body,#root{height:100%}
+  body{font-family:Georgia,serif;background:#0F172A}
+  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap');
+  @media print{
+    .no-print{display:none!important}
+    body{background:#fff!important}
+    #root{height:auto}
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "react":           "https://esm.sh/react@18",
+    "react-dom/client":"https://esm.sh/react-dom@18/client",
+    "recharts":        "https://esm.sh/recharts@2.12.7"
+  }
+}
+</script>
+
+<script type="module">
+import { createRoot } from "react-dom/client";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import {
+  RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell
+} from "recharts";
+
+// ── CONFIG ────────────────────────────────────────────────────────
+const API_URL = "https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec";
+
+const WEIGHTS = { language:0.25, math:0.20, reasoning:0.15, dikr:0.10, quran:0.15, behaviour:0.15 };
+
+const STATUS_COLORS = {
+  Pending:     { bg:"#FFF7ED", text:"#C2410C", border:"#FED7AA" },
+  Reviewed:    { bg:"#EFF6FF", text:"#1D4ED8", border:"#BFDBFE" },
+  Shortlisted: { bg:"#F0FDF4", text:"#15803D", border:"#BBF7D0" },
+  Enrolled:    { bg:"#ECFDF5", text:"#065F46", border:"#A7F3D0" },
+  Rejected:    { bg:"#FEF2F2", text:"#DC2626", border:"#FECACA" },
+};
+
+// ── SCORE HELPERS ─────────────────────────────────────────────────
+const pct = (v, max) => max > 0 ? Math.round((v/max)*100) : 0;
+
+const getTag = p => {
+  if (p < 25) return { label:"CRITICAL",   color:"#DC2626", bg:"#FEF2F2" };
+  if (p < 50) return { label:"DEVELOPING", color:"#D97706", bg:"#FFFBEB" };
+  if (p < 75) return { label:"COMPETENT",  color:"#2563EB", bg:"#EFF6FF" };
+  if (p < 90) return { label:"PROFICIENT", color:"#059669", bg:"#ECFDF5" };
+  return               { label:"EXEMPLARY", color:"#92400E", bg:"#FEF3C7" };
+};
+
+const heatColor = p => p<25?"#EF4444":p<50?"#F59E0B":p<75?"#3B82F6":p<90?"#10B981":"#D97706";
+
+const langScore = (r, lang) => {
+  const m = { English:["Eng-Listen","Eng-Speak","Eng-Read","Eng-Write"],
+               Arabic: ["Ar-Listen","Ar-Speak","Ar-Read","Ar-Write"],
+               Malayalam:["Mal-Listen","Mal-Speak","Mal-Read","Mal-Write"] };
+  const vals = (m[lang]||[]).map(k => parseFloat(r[k])||0);
+  return { total: vals.reduce((a,b)=>a+b,0), vals, keys:m[lang]||[] };
+};
+
+const calcGPI = r => {
+  const eS=langScore(r,"English").total, aS=langScore(r,"Arabic").total, mS=langScore(r,"Malayalam").total;
+  const langAvg = (pct(eS,8)+pct(aS,8)+pct(mS,8))/3;
+  const mathQ  = ["Math-Add","Math-Sub","Math-Mul","Math-Div"].filter(k=>r[k]==="Right").length;
+  const rsnQ   = ["Rsn-Pattern","Rsn-OddOne","Rsn-Days","Rsn-Size"].filter(k=>r[k]==="Right").length;
+  const dikrK  = pct(parseFloat(r["Dikr-Knows"])||0, 5);
+  const dikrP  = pct(parseFloat(r["Dikr-Performed"])||0, 5);
+  const qSum   = (parseFloat(r["Quran-Tajweed"])||0)+(parseFloat(r["Quran-Recitation"])||0)+(parseFloat(r["Quran-Hifz"])||0);
+  const behSum = ["Beh-Stubborn","Beh-Obedience","Beh-Siblings","Beh-Guests","Beh-Parents","Beh-Neatness"]
+                  .reduce((s,k)=>s+(parseFloat(r[k])||0),0);
+  const stPts  = parseFloat(r["ScreenTime"])||0;
+  const mathPct_=pct(mathQ,4), rsnPct_=pct(rsnQ,4), dikrPct_=(dikrK+dikrP)/2;
+  const quranPct_=pct(qSum,10), behPct_=pct(behSum+stPts,23);
+  const gpi = Math.round(langAvg*WEIGHTS.language + mathPct_*WEIGHTS.math + rsnPct_*WEIGHTS.reasoning +
+    dikrPct_*WEIGHTS.dikr + quranPct_*WEIGHTS.quran + behPct_*WEIGHTS.behaviour);
+  return { gpi, langAvg:Math.round(langAvg), mathPct:mathPct_, rsnPct:rsnPct_,
+    dikrPct:Math.round(dikrPct_), quranPct:quranPct_, behPct:behPct_,
+    engPct:pct(eS,8), arPct:pct(aS,8), mlPct:pct(mS,8) };
+};
+
+const sectionHeat = r => {
+  const sc = calcGPI(r);
+  return [
+    {label:"English",   pct:sc.engPct},  {label:"Arabic",    pct:sc.arPct},
+    {label:"Malayalam", pct:sc.mlPct},   {label:"Maths",     pct:sc.mathPct},
+    {label:"Reasoning", pct:sc.rsnPct},  {label:"Dikr",      pct:sc.dikrPct},
+    {label:"Qur'an",    pct:sc.quranPct},{label:"Behaviour", pct:sc.behPct},
+    {label:"Overall",   pct:sc.gpi},
+  ];
+};
+
+const generateNarrative = (r, scores) => {
+  const {gpi,engPct,arPct,mlPct,mathPct,rsnPct,dikrPct,quranPct,behPct} = scores;
+  const langs = [["English",engPct],["Arabic",arPct],["Malayalam",mlPct]].sort((a,b)=>b[1]-a[1]);
+  const [top,topP]=[langs[0][0],langs[0][1]], [bot,botP]=[langs[2][0],langs[2][1]];
+  const analytical = Math.round((mathPct+rsnPct)/2);
+  const spirit = Math.round((dikrPct+quranPct)/2);
+  return [
+    `Language competency is strongest in ${top} (${topP}%) and requires targeted intervention in ${bot} (${botP}%). Oral skills show ${topP>70?"strong":"moderate"} acquisition; written production should be prioritised in remediation planning.`,
+    `Quantitative and logical reasoning composite stands at ${analytical}%. ${analytical>=75?"Student demonstrates solid numerical fluency and pattern recognition, indicating readiness for advanced problem sets.":analytical>=50?"Core arithmetic is emerging but logical sequencing requires structured reinforcement through graduated exercises.":"Foundational numeracy is below expected benchmarks; immediate diagnostic intervention is recommended before curriculum progression."}`,
+    `Spiritual practice index is ${spirit}% and behavioural disposition scores ${behPct}%. ${spirit>=70&&behPct>=70?"The student exhibits consistent religious observance and positive social conduct — a significant strength for holistic development.":spirit>=50||behPct>=50?"Partial engagement in spiritual routines and moderate behavioural compliance; personalised mentoring is recommended to build consistency.":"Both spiritual compliance and behavioural metrics are below threshold. A parent-teacher review is strongly advised to establish supportive home routines."}`
+  ];
+};
+
+const api = body => fetch(API_URL,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(body)}).then(r=>r.json());
+
+// ── SHARED COMPONENTS ─────────────────────────────────────────────
+const Tag = ({pctVal,size="sm"}) => {
+  const t=getTag(pctVal);
+  return React.createElement("span",{style:{background:t.bg,color:t.color,
+    padding:size==="lg"?"5px 12px":"2px 8px",borderRadius:4,
+    fontSize:size==="lg"?"10px":"9px",fontWeight:800,letterSpacing:"0.06em",
+    fontFamily:"'DM Mono',monospace,Georgia"}},t.label);
+};
+
+const ScoreBar = ({val,max,color="#0F172A"}) => {
+  const p=pct(val,max);
+  return React.createElement("div",{style:{display:"flex",alignItems:"center",gap:10}},
+    React.createElement("div",{style:{flex:1,height:5,background:"#F1F5F9",borderRadius:3,overflow:"hidden"}},
+      React.createElement("div",{style:{width:`${p}%`,height:"100%",background:color,borderRadius:3,transition:"width 0.8s"}})),
+    React.createElement("span",{style:{fontSize:10,fontWeight:700,color:"#64748B",width:28,textAlign:"right",fontFamily:"'DM Mono',monospace"}},`${val}/${max}`)
+  );
+};
+
+const HeatMap = ({sections}) =>
+  React.createElement("div",{style:{display:"grid",gridTemplateColumns:"repeat(9,1fr)",gap:4}},
+    sections.map(s=>React.createElement("div",{key:s.label,style:{textAlign:"center"}},
+      React.createElement("div",{title:`${s.label}: ${s.pct}%`,style:{height:30,borderRadius:4,
+        background:heatColor(s.pct),display:"flex",alignItems:"center",justifyContent:"center",
+        color:"#fff",fontSize:10,fontWeight:800,fontFamily:"'DM Mono',monospace"}},s.pct+"%"),
+      React.createElement("div",{style:{fontSize:7,color:"#94A3B8",marginTop:3,fontWeight:600,
+        letterSpacing:"0.04em",textTransform:"uppercase",lineHeight:1.2}},s.label)
+    ))
+  );
+
+const SectionCard = ({number,title,children}) =>
+  React.createElement("div",{style:{border:"1px solid #E2E8F0",borderRadius:8,marginBottom:16,overflow:"hidden"}},
+    React.createElement("div",{style:{background:"#F8FAFC",borderBottom:"1px solid #E2E8F0",
+      padding:"11px 20px",display:"flex",alignItems:"center",gap:12}},
+      React.createElement("span",{style:{width:22,height:22,borderRadius:4,background:"#0F172A",
+        color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,
+        fontWeight:800,fontFamily:"'DM Mono',monospace",flexShrink:0}},number),
+      React.createElement("span",{style:{fontSize:11,fontWeight:800,color:"#0F172A",
+        letterSpacing:"0.07em",textTransform:"uppercase"}},title)
+    ),
+    React.createElement("div",{style:{padding:20}},children)
+  );
+
+const TblHdr = () =>
+  React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 80px 60px 100px 110px",
+    gap:10,padding:"0 0 8px",borderBottom:"2px solid #E2E8F0",marginBottom:4}},
+    ["Metric","Score","Pct","Benchmark","Status"].map(h=>
+      React.createElement("span",{key:h,style:{fontSize:9,fontWeight:800,color:"#94A3B8",
+        letterSpacing:"0.08em",textTransform:"uppercase",
+        textAlign:h!=="Metric"?"right":"left",fontFamily:"'DM Mono',monospace"}},h)
+    )
+  );
+
+const MetricRow = ({label,val,max,benchmark}) => {
+  const p=pct(val,max);
+  const above = benchmark!==undefined && val>=benchmark;
+  return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 80px 60px 100px 110px",
+    gap:10,alignItems:"center",padding:"7px 0",borderBottom:"1px solid #F1F5F9"}},
+    React.createElement("span",{style:{fontSize:12,color:"#334155",fontWeight:500}},label),
+    React.createElement("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,fontWeight:700,color:"#0F172A",textAlign:"right"}},`${val}/${max}`),
+    React.createElement("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,color:"#64748B",textAlign:"right"}},p+"%"),
+    benchmark!==undefined
+      ? React.createElement("span",{style:{fontSize:9,color:above?"#059669":"#DC2626",fontWeight:700,textAlign:"center"}},above?`▲ >${benchmark}`:`▼ <${benchmark}`)
+      : React.createElement("span"),
+    React.createElement(Tag,{pctVal:p})
+  );
+};
+
+// ── CHARTS ────────────────────────────────────────────────────────
+const LangRadar = ({r}) => {
+  const data = ["Listening","Speaking","Reading","Writing"].map(sk=>{
+    const km={Listening:"Listen",Speaking:"Speak",Reading:"Read",Writing:"Write"};
+    return { skill:sk,
+      English:  (parseFloat(r[`Eng-${km[sk]}`])||0)*50,
+      Arabic:   (parseFloat(r[`Ar-${km[sk]}`])||0)*50,
+      Malayalam:(parseFloat(r[`Mal-${km[sk]}`])||0)*50 };
+  });
+  return React.createElement(ResponsiveContainer,{width:"100%",height:200},
+    React.createElement(RadarChart,{data,margin:{top:10,right:30,bottom:10,left:30}},
+      React.createElement(PolarGrid,{stroke:"#E2E8F0"}),
+      React.createElement(PolarAngleAxis,{dataKey:"skill",tick:{fontSize:9,fill:"#64748B",fontWeight:600}}),
+      React.createElement(PolarRadiusAxis,{domain:[0,100],tick:false,axisLine:false}),
+      React.createElement(Radar,{name:"English",dataKey:"English",stroke:"#6F4AE1",fill:"#6F4AE1",fillOpacity:0.15,strokeWidth:2}),
+      React.createElement(Radar,{name:"Arabic",dataKey:"Arabic",stroke:"#0EA5E9",fill:"#0EA5E9",fillOpacity:0.12,strokeWidth:2}),
+      React.createElement(Radar,{name:"Malayalam",dataKey:"Malayalam",stroke:"#10B981",fill:"#10B981",fillOpacity:0.12,strokeWidth:2}),
+      React.createElement(Tooltip,{formatter:(v)=>(v/50).toFixed(1)+"/2"})
+    )
+  );
+};
+
+const CorrectBar = ({r}) => {
+  const items=[
+    {name:"Add",k:"Math-Add",g:"Math"},{name:"Sub",k:"Math-Sub",g:"Math"},
+    {name:"Mul",k:"Math-Mul",g:"Math"},{name:"Div",k:"Math-Div",g:"Math"},
+    {name:"Pattern",k:"Rsn-Pattern",g:"Rsn"},{name:"Odd One",k:"Rsn-OddOne",g:"Rsn"},
+    {name:"Days",k:"Rsn-Days",g:"Rsn"},{name:"Size",k:"Rsn-Size",g:"Rsn"},
+  ];
+  const data=items.map(i=>({name:i.name,score:r[i.k]==="Right"?100:0,group:i.g}));
+  return React.createElement(ResponsiveContainer,{width:"100%",height:170},
+    React.createElement(BarChart,{data,margin:{top:8,right:8,bottom:28,left:0},barSize:22},
+      React.createElement(CartesianGrid,{vertical:false,stroke:"#F1F5F9"}),
+      React.createElement(XAxis,{dataKey:"name",tick:{fontSize:9,fill:"#94A3B8"},angle:-35,textAnchor:"end",interval:0}),
+      React.createElement(YAxis,{domain:[0,100],tick:{fontSize:9},tickFormatter:v=>v+"%"}),
+      React.createElement(Tooltip,{formatter:v=>v===100?"✓ Right":"✗ Wrong"}),
+      React.createElement(Bar,{dataKey:"score",radius:[4,4,0,0]},
+        data.map((d,i)=>React.createElement(Cell,{key:i,fill:d.score===100?(d.group==="Math"?"#6F4AE1":"#10B981"):"#E2E8F0"}))
+      )
+    )
+  );
+};
+
+const QuranScale = ({r}) =>
+  React.createElement("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+    [{k:"Quran-Tajweed",label:"Tajweed",max:3},{k:"Quran-Recitation",label:"Recitation Practice",max:3},{k:"Quran-Hifz",label:"Hifz",max:4}]
+    .map(f=>{const val=parseFloat(r[f.k])||0,p=pct(val,f.max);return React.createElement("div",{key:f.k},
+      React.createElement("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:5}},
+        React.createElement("span",{style:{fontSize:12,fontWeight:600,color:"#334155"}},f.label),
+        React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8}},
+          React.createElement("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,fontWeight:700}},`${val}/${f.max}`),
+          React.createElement(Tag,{pctVal:p})
+        )
+      ),
+      React.createElement("div",{style:{height:7,background:"#F1F5F9",borderRadius:4,overflow:"hidden"}},
+        React.createElement("div",{style:{width:`${p}%`,height:"100%",borderRadius:4,transition:"width 1s",
+          background:p>=75?"#6F4AE1":p>=50?"#0EA5E9":p>=25?"#F59E0B":"#EF4444"}})
+      )
+    );})
+  );
+
+const DispositionTable = ({r}) => {
+  const internal=[{label:"Free from Stubbornness",k:"Beh-Stubborn",max:3},{label:"Obedience",k:"Beh-Obedience",max:3},{label:"Helping Parents",k:"Beh-Parents",max:3},{label:"Neatness",k:"Beh-Neatness",max:3}];
+  const external=[{label:"Caring for Siblings",k:"Beh-Siblings",max:3},{label:"Hospitality to Guests",k:"Beh-Guests",max:3}];
+  const Row=({f})=>{const val=parseFloat(r[f.k])||0,p=pct(val,f.max);return React.createElement("tr",{style:{borderBottom:"1px solid #F1F5F9"}},
+    React.createElement("td",{style:{padding:"7px 0",fontSize:12,color:"#334155"}},f.label),
+    React.createElement("td",{style:{padding:"7px 10px",fontFamily:"'DM Mono',monospace",fontSize:11,fontWeight:700,textAlign:"center"}},`${val}/${f.max}`),
+    React.createElement("td",{style:{padding:"7px 0",textAlign:"center"}},React.createElement(Tag,{pctVal:p}))
+  );};
+  const ColHeader=({title})=>React.createElement("div",{style:{fontSize:9,fontWeight:800,color:"#94A3B8",letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:8,fontFamily:"'DM Mono',monospace"}},title);
+  return React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}},
+    React.createElement("div",null,React.createElement(ColHeader,{title:"Internal (Home)"}),React.createElement("table",{style:{width:"100%",borderCollapse:"collapse"}},React.createElement("tbody",null,internal.map(f=>React.createElement(Row,{key:f.k,f}))))),
+    React.createElement("div",null,
+      React.createElement(ColHeader,{title:"External (Social)"}),
+      React.createElement("table",{style:{width:"100%",borderCollapse:"collapse"}},React.createElement("tbody",null,external.map(f=>React.createElement(Row,{key:f.k,f})))),
+      React.createElement("div",{style:{marginTop:14,padding:"10px 14px",background:"#F8FAFC",borderRadius:6,border:"1px solid #E2E8F0"}},
+        React.createElement("div",{style:{fontSize:9,fontWeight:800,color:"#94A3B8",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6,fontFamily:"'DM Mono',monospace"}},"Screen Time Impact"),
+        React.createElement("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+          React.createElement("span",{style:{fontSize:12,color:"#334155"}},"Daily Usage Score"),
+          React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8}},
+            React.createElement("span",{style:{fontFamily:"'DM Mono',monospace",fontWeight:700,fontSize:12}},`${r["ScreenTime"]||"0"}/5`),
+            React.createElement(Tag,{pctVal:pct(parseFloat(r["ScreenTime"])||0,5)})
+          )
+        )
+      )
+    )
+  );
+};
+
+// ── AUDIT REPORT ─────────────────────────────────────────────────
+const AuditReport = ({record:r, onClose}) => {
+  const scores = calcGPI(r);
+  const {gpi,engPct,arPct,mlPct,mathPct,rsnPct,dikrPct,quranPct,behPct} = scores;
+  const heat = sectionHeat(r);
+  const narrative = generateNarrative(r, scores);
+  const gpiTag = getTag(gpi);
+  const ref = useRef();
+  const def = (k,fb="—") => r[k]||fb;
+
+  const doExport = () => {
+    const el=ref.current;
+    const orig=document.title;
+    document.title=`HAS Assessment — ${def("Full Name")} — ${def("Ref No")}`;
+    el.classList.add("print-target");
+    window.print();
+    el.classList.remove("print-target");
+    document.title=orig;
+  };
+
+  const langSubRows = (lang, pfx) =>
+    ["Listen","Speak","Read","Write"].map((sk,i)=>
+      React.createElement("div",{key:sk,style:{display:"flex",alignItems:"center",gap:8,marginBottom:4}},
+        React.createElement("span",{style:{fontSize:10,color:"#94A3B8",width:52}},["Listen","Speak","Read","Write"][i]),
+        React.createElement(ScoreBar,{val:parseFloat(r[`${pfx}-${sk}`])||0,max:2,
+          color:lang==="English"?"#6F4AE1":lang==="Arabic"?"#0EA5E9":"#10B981"})
+      )
+    );
+
+  return React.createElement("div",{style:{position:"fixed",inset:0,background:"rgba(15,23,42,0.75)",
+    zIndex:1000,display:"flex",alignItems:"flex-start",justifyContent:"center",
+    overflowY:"auto",padding:"24px 16px"}},
+    React.createElement("div",{style:{background:"#fff",borderRadius:12,width:"100%",maxWidth:880,
+      boxShadow:"0 24px 80px rgba(0,0,0,0.4)"}},
+
+      // Toolbar
+      React.createElement("div",{className:"no-print",style:{padding:"13px 24px",
+        borderBottom:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between",
+        alignItems:"center",background:"#F8FAFC",borderRadius:"12px 12px 0 0"}},
+        React.createElement("span",{style:{fontSize:11,fontWeight:800,color:"#475569",
+          letterSpacing:"0.07em",textTransform:"uppercase",fontFamily:"'DM Mono',monospace"}},
+          "Professional Audit Report"),
+        React.createElement("div",{style:{display:"flex",gap:8}},
+          React.createElement("button",{onClick:doExport,style:{padding:"7px 16px",borderRadius:6,
+            border:"none",background:"#0F172A",color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}},
+            "↓ Export PDF"),
+          React.createElement("button",{onClick:onClose,style:{padding:"7px 12px",borderRadius:6,
+            border:"1px solid #E2E8F0",background:"#fff",fontSize:14,cursor:"pointer"}},"✕")
+        )
+      ),
+
+      React.createElement("div",{ref,style:{padding:"32px 28px"}},
+
+        // Header
+        React.createElement("div",{style:{display:"flex",justifyContent:"space-between",
+          alignItems:"flex-start",marginBottom:28,paddingBottom:20,borderBottom:"2px solid #0F172A"}},
+          React.createElement("div",null,
+            React.createElement("div",{style:{fontSize:9,fontWeight:800,color:"#94A3B8",
+              letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:4,
+              fontFamily:"'DM Mono',monospace"}},"HAS Academy · Entry Level Assessment"),
+            React.createElement("div",{style:{fontSize:26,fontWeight:900,color:"#0F172A",
+              letterSpacing:"-0.02em",marginBottom:8}},def("Full Name")),
+            React.createElement("div",{style:{display:"flex",gap:16,flexWrap:"wrap"}},
+              [["Enrollment",def("Enrollment")],["Grade",def("Grade")],
+               ["Place",def("Place")],["Ref No",def("Ref No")]].map(([l,v])=>
+                React.createElement("div",{key:l,style:{display:"flex",gap:5,alignItems:"baseline"}},
+                  React.createElement("span",{style:{fontSize:9,fontWeight:700,color:"#94A3B8",
+                    textTransform:"uppercase",letterSpacing:"0.07em",fontFamily:"'DM Mono',monospace"}},l),
+                  React.createElement("span",{style:{fontSize:12,fontWeight:700,color:"#334155"}},v)
+                )
+              )
+            )
+          ),
+          React.createElement("div",{style:{textAlign:"center",flexShrink:0}},
+            React.createElement("div",{style:{width:76,height:76,borderRadius:"50%",
+              border:`4px solid ${gpiTag.color}`,display:"flex",flexDirection:"column",
+              alignItems:"center",justifyContent:"center",background:gpiTag.bg}},
+              React.createElement("div",{style:{fontSize:24,fontWeight:900,color:gpiTag.color,
+                lineHeight:1,fontFamily:"'DM Mono',monospace"}},gpi),
+              React.createElement("div",{style:{fontSize:8,fontWeight:700,color:gpiTag.color}},"GPI")
+            ),
+            React.createElement("div",{style:{marginTop:6}},React.createElement(Tag,{pctVal:gpi,size:"lg"}))
+          )
+        ),
+
+        // Heat map
+        React.createElement("div",{style:{marginBottom:28}},
+          React.createElement("div",{style:{fontSize:9,fontWeight:800,color:"#94A3B8",
+            letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:10,
+            fontFamily:"'DM Mono',monospace"}},"Section Performance Heat Map"),
+          React.createElement(HeatMap,{sections:heat})
+        ),
+
+        // WORKSTREAM I
+        React.createElement(SectionCard,{number:"I",title:"Communication & Literacy"},
+          // Personal identity
+          React.createElement("div",{style:{marginBottom:18,padding:"13px 16px",background:"#F8FAFC",
+            borderRadius:6,border:"1px solid #E2E8F0"}},
+            React.createElement("div",{style:{fontSize:9,fontWeight:800,color:"#94A3B8",
+              letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:10,
+              fontFamily:"'DM Mono',monospace"}},"Personal Identity"),
+            React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"5px 24px"}},
+              [["Parent Name",def("Parent Name")],["Phone No",def("Phone")],
+               ["Date of Birth",def("DOB")],["Assessed",
+                r["Timestamp"]?new Date(r["Timestamp"]).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}):"—"]
+              ].map(([l,v])=>
+                React.createElement("div",{key:l,style:{display:"flex",justifyContent:"space-between",
+                  padding:"4px 0",borderBottom:"1px solid #F1F5F9"}},
+                  React.createElement("span",{style:{fontSize:11,color:"#94A3B8",fontWeight:600}},l),
+                  React.createElement("span",{style:{fontSize:11,fontWeight:700,color:"#0F172A"}},v)
+                )
+              )
+            )
+          ),
+          // Language grid
+          React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}},
+            React.createElement("div",null,
+              React.createElement(TblHdr,null),
+              [["English",engPct,65,"Eng"],["Arabic",arPct,60,"Ar"],["Malayalam",mlPct,62,"Mal"]].map(([lang,p,bench,pfx])=>
+                React.createElement(MetricRow,{key:lang,label:lang,val:langScore(r,lang).total,max:8,benchmark:bench})
+              ),
+              React.createElement("div",{style:{marginTop:14}},
+                [["English","#6F4AE1","Eng"],["Arabic","#0EA5E9","Ar"],["Malayalam","#10B981","Mal"]].map(([lang,color,pfx])=>
+                  React.createElement("div",{key:lang,style:{marginBottom:10}},
+                    React.createElement("div",{style:{fontSize:10,fontWeight:700,color:"#475569",marginBottom:5}},lang),
+                    langSubRows(lang,pfx)
+                  )
+                )
+              )
+            ),
+            React.createElement("div",null,
+              React.createElement("div",{style:{fontSize:10,fontWeight:700,color:"#475569",marginBottom:8}},"Comparative Radar"),
+              React.createElement(LangRadar,{r}),
+              React.createElement("div",{style:{display:"flex",gap:12,justifyContent:"center",marginTop:6}},
+                [["English","#6F4AE1"],["Arabic","#0EA5E9"],["Malayalam","#10B981"]].map(([l,c])=>
+                  React.createElement("div",{key:l,style:{display:"flex",alignItems:"center",gap:5}},
+                    React.createElement("div",{style:{width:9,height:9,borderRadius:"50%",background:c}}),
+                    React.createElement("span",{style:{fontSize:10,color:"#64748B"}},l)
+                  )
+                )
+              )
+            )
+          )
+        ),
+
+        // WORKSTREAM II
+        React.createElement(SectionCard,{number:"II",title:"Quantitative & Logical Reasoning"},
+          React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}},
+            React.createElement("div",null,
+              [["Addition","Math-Add"],["Subtraction","Math-Sub"],["Multiplication","Math-Mul"],["Division","Math-Div"],
+               ["Number Pattern","Rsn-Pattern"],["Odd One Out","Rsn-OddOne"],["Days of Week","Rsn-Days"],["Size Comparison","Rsn-Size"]
+              ].map(([label,k])=>{
+                const correct=r[k]==="Right";
+                return React.createElement("div",{key:k,style:{display:"flex",alignItems:"center",
+                  justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid #F1F5F9"}},
+                  React.createElement("span",{style:{fontSize:12,color:"#334155"}},label),
+                  React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8}},
+                    React.createElement("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:11,
+                      color:correct?"#059669":"#DC2626",fontWeight:700}},correct?"✓ Right":"✗ Wrong"),
+                    React.createElement(Tag,{pctVal:correct?100:0})
+                  )
+                );
+              }),
+              React.createElement("div",{style:{marginTop:10,display:"flex",flexDirection:"column",gap:6}},
+                [["Maths Score",["Math-Add","Math-Sub","Math-Mul","Math-Div"],4],
+                 ["Reasoning Score",["Rsn-Pattern","Rsn-OddOne","Rsn-Days","Rsn-Size"],4]].map(([l,keys,max])=>
+                  React.createElement("div",{key:l,style:{padding:"9px 14px",background:"#F8FAFC",
+                    borderRadius:6,border:"1px solid #E2E8F0",display:"flex",justifyContent:"space-between"}},
+                    React.createElement("span",{style:{fontSize:12,fontWeight:700}},l),
+                    React.createElement("span",{style:{fontFamily:"'DM Mono',monospace",fontWeight:800,fontSize:13}},
+                      `${keys.filter(k=>r[k]==="Right").length}/${max}`)
+                  )
+                )
+              )
+            ),
+            React.createElement("div",null,
+              React.createElement("div",{style:{fontSize:10,fontWeight:700,color:"#475569",marginBottom:8}},"Correct vs. Incorrect"),
+              React.createElement(CorrectBar,{r})
+            )
+          )
+        ),
+
+        // WORKSTREAM III
+        React.createElement(SectionCard,{number:"III",title:"Spiritual & Ritual Compliance"},
+          React.createElement("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}},
+            React.createElement("div",null,
+              React.createElement("div",{style:{fontSize:10,fontWeight:700,color:"#475569",marginBottom:10}},"Daily Dikr"),
+              React.createElement(TblHdr,null),
+              React.createElement(MetricRow,{label:"Knowledge of Supplications",val:parseFloat(r["Dikr-Knows"])||0,max:5,benchmark:3}),
+              React.createElement(MetricRow,{label:"Performed Today",val:parseFloat(r["Dikr-Performed"])||0,max:5,benchmark:3})
+            ),
+            React.createElement("div",null,
+              React.createElement("div",{style:{fontSize:10,fontWeight:700,color:"#475569",marginBottom:10}},"Qur'an Quality Scale"),
+              React.createElement(QuranScale,{r})
+            )
+          )
+        ),
+
+        // WORKSTREAM IV
+        React.createElement(SectionCard,{number:"IV",title:"Behavioural & Developmental Audit"},
+          React.createElement(DispositionTable,{r})
+        ),
+
+        // AI NARRATIVE
+        React.createElement("div",{style:{border:"1px solid #E2E8F0",borderRadius:8,overflow:"hidden",marginBottom:16}},
+          React.createElement("div",{style:{background:"#0F172A",padding:"12px 20px",
+            display:"flex",alignItems:"center",gap:10}},
+            React.createElement("span",{style:{fontSize:9,fontWeight:800,color:"rgba(255,255,255,0.4)",
+              letterSpacing:"0.1em",textTransform:"uppercase",fontFamily:"'DM Mono',monospace"}},"◆ AI-Assisted"),
+            React.createElement("span",{style:{fontSize:11,fontWeight:800,color:"#fff",
+              letterSpacing:"0.05em",textTransform:"uppercase"}},"Professional Evaluation Summary")
+          ),
+          React.createElement("div",{style:{padding:20}},
+            narrative.map((b,i)=>
+              React.createElement("div",{key:i,style:{display:"flex",gap:12,marginBottom:i<2?14:0}},
+                React.createElement("div",{style:{width:4,borderRadius:2,flexShrink:0,
+                  background:["#6F4AE1","#0EA5E9","#10B981"][i]}}),
+                React.createElement("p",{style:{fontSize:13,lineHeight:1.75,color:"#334155",margin:0}},b)
+              )
+            )
+          )
+        ),
+
+        // Footer
+        React.createElement("div",{style:{display:"flex",justifyContent:"space-between",
+          alignItems:"center",paddingTop:16,borderTop:"1px solid #E2E8F0"}},
+          React.createElement("span",{style:{fontSize:10,color:"#CBD5E1",fontFamily:"'DM Mono',monospace"}},
+            `HAS Academy · ${new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"long",year:"numeric"})}`),
+          React.createElement("span",{style:{fontSize:10,color:"#CBD5E1",fontFamily:"'DM Mono',monospace"}},
+            `Ref: ${def("Ref No")} · GPI: ${gpi}/100`)
+        )
+      )  // end report body
+    )  // end modal container
+  );
+};
+
+// ── MAIN DASHBOARD ────────────────────────────────────────────────
+function App() {
+  const [authed,setAuthed]=useState(false);
+  const [token,setToken]=useState("");
+  const [user,setUser]=useState("");
+  const [loginU,setLoginU]=useState("");
+  const [loginP,setLoginP]=useState("");
+  const [loginErr,setLoginErr]=useState("");
+  const [loading,setLoading]=useState(false);
+  const [records,setRecords]=useState([]);
+  const [stats,setStats]=useState(null);
+  const [tab,setTab]=useState("all");
+  const [search,setSearch]=useState("");
+  const [gradeF,setGradeF]=useState("All");
+  const [openRec,setOpenRec]=useState(null);
+  const [recLoading,setRecLoading]=useState(false);
+
+  const doLogin=async()=>{
+    if(!loginU||!loginP){setLoginErr("Enter username and password.");return;}
+    setLoading(true);setLoginErr("");
+    try{const res=await api({action:"adminLogin",username:loginU,password:loginP});
+      if(res.status==="ok"){setToken(res.token);setUser(res.username);setAuthed(true);}
+      else{setLoginErr(res.message||"Login failed.");}
+    }catch{setLoginErr("Cannot connect to server.");}
+    setLoading(false);
+  };
+
+  const loadData=useCallback(async()=>{
+    if(!token)return;setRecLoading(true);
+    const f={status:tab==="all"?"All":tab,search,grade:gradeF};
+    try{const[rR,sR]=await Promise.all([api({action:"getRecords",token,filters:f}),api({action:"getStats",token})]);
+      if(rR.status==="ok")setRecords(rR.records||[]);
+      if(sR.status==="ok")setStats(sR.stats);
+    }catch{}
+    setRecLoading(false);
+  },[token,tab,search,gradeF]);
+
+  useEffect(()=>{if(authed)loadData();},[authed,loadData]);
+
+  const updateStatus=async(refNo,status)=>{
+    await api({action:"updateStatus",token,refNo,status});
+    setOpenRec(r=>r?{...r,Status:status}:r);loadData();
+  };
+  const deleteRec=async refNo=>{
+    if(!window.confirm(`Delete ${refNo}?`))return;
+    await api({action:"deleteRecord",token,refNo});setOpenRec(null);loadData();
+  };
+
+  // — Login —
+  if(!authed)return React.createElement("div",{style:{minHeight:"100vh",background:"#0F172A",
+    display:"flex",alignItems:"center",justifyContent:"center",padding:24}},
+    React.createElement("div",{style:{background:"#fff",borderRadius:12,padding:"40px 36px",
+      width:"100%",maxWidth:380,boxShadow:"0 32px 80px rgba(0,0,0,0.5)"}},
+      React.createElement("div",{style:{fontSize:9,fontWeight:800,color:"#94A3B8",
+        letterSpacing:"0.14em",textTransform:"uppercase",marginBottom:4,
+        fontFamily:"'DM Mono',monospace"}},"HAS Academy"),
+      React.createElement("div",{style:{fontSize:22,fontWeight:900,color:"#0F172A",
+        marginBottom:4,letterSpacing:"-0.02em"}},"Assessment Portal"),
+      React.createElement("div",{style:{fontSize:13,color:"#64748B",marginBottom:28}},
+        "Secure admin access to audit records & reports."),
+      ...[{label:"Username",val:loginU,set:setLoginU,type:"text",ph:"Enter username"},
+          {label:"Password",val:loginP,set:setLoginP,type:"password",ph:"Enter password",
+           onKeyDown:e=>e.key==="Enter"&&doLogin()}
+      ].map(f=>React.createElement("div",{key:f.label,style:{marginBottom:16}},
+        React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#475569",
+          letterSpacing:"0.07em",textTransform:"uppercase",marginBottom:6,
+          fontFamily:"'DM Mono',monospace"}},f.label),
+        React.createElement("input",{type:f.type,value:f.val,
+          onChange:e=>f.set(e.target.value),placeholder:f.ph,onKeyDown:f.onKeyDown,
+          style:{width:"100%",padding:"12px 14px",border:"1.5px solid #E2E8F0",
+            borderRadius:8,fontSize:15,outline:"none",fontFamily:"Georgia,serif"}})
+      )),
+      loginErr&&React.createElement("div",{style:{padding:"10px 14px",background:"#FEF2F2",
+        border:"1px solid #FECACA",borderRadius:6,fontSize:12,color:"#DC2626",marginBottom:12}},loginErr),
+      React.createElement("button",{onClick:doLogin,disabled:loading,
+        style:{width:"100%",padding:14,background:"#0F172A",color:"#fff",border:"none",
+          borderRadius:8,fontSize:14,fontWeight:800,cursor:"pointer",letterSpacing:"0.04em",
+          display:"flex",alignItems:"center",justifyContent:"center",gap:8}},
+        loading?"Signing in…":"Sign In →")
+    )
+  );
+
+  // — Dashboard —
+  const TABS=["all","Pending","Reviewed","Shortlisted","Enrolled","Rejected"];
+  const SC=STATUS_COLORS;
+
+  return React.createElement("div",{style:{minHeight:"100vh",background:"#F8FAFC"}},
+
+    // Nav
+    React.createElement("div",{style:{background:"#0F172A",padding:"14px 28px",display:"flex",
+      alignItems:"center",justifyContent:"space-between",position:"sticky",top:0,zIndex:50}},
+      React.createElement("div",null,
+        React.createElement("div",{style:{fontSize:9,fontWeight:700,color:"rgba(255,255,255,0.4)",
+          letterSpacing:"0.12em",textTransform:"uppercase",fontFamily:"'DM Mono',monospace"}},"HAS Academy"),
+        React.createElement("div",{style:{fontSize:14,fontWeight:800,color:"#fff",letterSpacing:"0.02em"}},"Assessment Audit Console")
+      ),
+      React.createElement("div",{style:{display:"flex",alignItems:"center",gap:16}},
+        React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8}},
+          React.createElement("div",{style:{width:8,height:8,borderRadius:"50%",background:"#10B981"}}),
+          React.createElement("span",{style:{fontSize:12,color:"rgba(255,255,255,0.7)",fontFamily:"'DM Mono',monospace"}},user)
+        ),
+        React.createElement("button",{onClick:()=>setAuthed(false),
+          style:{padding:"6px 14px",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,
+            background:"transparent",color:"rgba(255,255,255,0.6)",fontSize:12,cursor:"pointer"}},
+          "Sign Out"),
+        React.createElement("a",{href:"/",style:{padding:"6px 14px",border:"1px solid rgba(255,255,255,0.15)",
+          borderRadius:6,color:"rgba(255,255,255,0.6)",fontSize:12,textDecoration:"none"}},"← Public Form")
+      )
+    ),
+
+    React.createElement("div",{style:{maxWidth:1200,margin:"0 auto",padding:"28px 24px"}},
+
+      // Stats
+      stats&&React.createElement("div",{style:{display:"grid",
+        gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:12,marginBottom:24}},
+        [["Total",stats.total,"#0F172A"],["Pending",stats.byStatus?.Pending||0,"#D97706"],
+         ["Reviewed",stats.byStatus?.Reviewed||0,"#2563EB"],
+         ["Shortlisted",stats.byStatus?.Shortlisted||0,"#059669"],
+         ["Enrolled",stats.byStatus?.Enrolled||0,"#065F46"],
+         ["Rejected",stats.byStatus?.Rejected||0,"#DC2626"]
+        ].map(([l,v,c])=>
+          React.createElement("div",{key:l,style:{background:"#fff",border:"1px solid #E2E8F0",
+            borderRadius:8,padding:"16px 18px",borderLeft:`4px solid ${c}`}},
+            React.createElement("div",{style:{fontFamily:"'DM Mono',monospace",fontSize:28,
+              fontWeight:900,color:c,lineHeight:1}},v||0),
+            React.createElement("div",{style:{fontSize:10,fontWeight:700,color:"#94A3B8",
+              letterSpacing:"0.07em",textTransform:"uppercase",marginTop:4}},l)
+          )
+        )
+      ),
+
+      // Tabs + Filters
+      React.createElement("div",{style:{background:"#fff",border:"1px solid #E2E8F0",
+        borderRadius:8,padding:"16px 20px",marginBottom:16}},
+        React.createElement("div",{style:{display:"flex",gap:4,marginBottom:14,flexWrap:"wrap"}},
+          TABS.map(t=>React.createElement("button",{key:t,onClick:()=>setTab(t),
+            style:{padding:"7px 16px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:700,
+              border:tab===t?"none":"1px solid #E2E8F0",
+              background:tab===t?"#0F172A":"transparent",
+              color:tab===t?"#fff":"#64748B",transition:"all 0.15s",textTransform:"capitalize"}},
+            t==="all"?"All Records":t
+          ))
+        ),
+        React.createElement("div",{style:{display:"flex",gap:10}},
+          React.createElement("input",{value:search,onChange:e=>{setSearch(e.target.value);},
+            onKeyDown:e=>e.key==="Enter"&&loadData(),
+            placeholder:"Search name, enrollment, ref number…",
+            style:{flex:1,padding:"9px 14px",border:"1.5px solid #E2E8F0",borderRadius:6,
+              fontSize:13,outline:"none",fontFamily:"Georgia,serif"}}),
+          React.createElement("select",{value:gradeF,onChange:e=>setGradeF(e.target.value),
+            style:{padding:"9px 14px",border:"1.5px solid #E2E8F0",borderRadius:6,
+              fontSize:13,cursor:"pointer",fontFamily:"Georgia,serif"}},
+            ["All","LKG","UKG","1","2","3","4","5","6","7","8","9","10","11","12"].map(g=>
+              React.createElement("option",{key:g,value:g},g==="All"?"All Grades":"Grade "+g)
+            )
+          ),
+          React.createElement("button",{onClick:loadData,
+            style:{padding:"9px 18px",borderRadius:6,border:"none",background:"#0F172A",
+              color:"#fff",fontSize:12,fontWeight:700,cursor:"pointer"}},"Refresh")
+        )
+      ),
+
+      // Table
+      React.createElement("div",{style:{background:"#fff",border:"1px solid #E2E8F0",
+        borderRadius:8,overflow:"hidden"}},
+        recLoading?React.createElement("div",{style:{padding:48,textAlign:"center",color:"#94A3B8",fontSize:13}},"Loading records…"):
+        records.length===0?React.createElement("div",{style:{padding:48,textAlign:"center",color:"#94A3B8"}},
+          React.createElement("div",{style:{fontSize:32,marginBottom:12}},"📭"),
+          React.createElement("div",{style:{fontSize:13,fontWeight:600}},"No records found")
+        ):
+        React.createElement("div",{style:{overflowX:"auto"}},
+          React.createElement("table",{style:{width:"100%",borderCollapse:"collapse"}},
+            React.createElement("thead",null,
+              React.createElement("tr",{style:{background:"#F8FAFC",borderBottom:"2px solid #E2E8F0"}},
+                ["Ref No","Name","Grade","Place","Phone","Submitted","GPI","Status",""].map(h=>
+                  React.createElement("th",{key:h,style:{padding:"11px 16px",textAlign:"left",
+                    fontSize:9,fontWeight:800,color:"#94A3B8",letterSpacing:"0.08em",
+                    textTransform:"uppercase",fontFamily:"'DM Mono',monospace",whiteSpace:"nowrap"}},h)
+                )
+              )
+            ),
+            React.createElement("tbody",null,
+              records.map((r,i)=>{
+                const sc=calcGPI(r);
+                const status=r["Status"]||"Pending";
+                const scol=SC[status]||SC.Pending;
+                const date=r["Timestamp"]?new Date(r["Timestamp"]).toLocaleDateString("en-GB",{day:"2-digit",month:"short"}):"—";
+                const gTag=getTag(sc.gpi);
+                return React.createElement("tr",{key:i,style:{borderBottom:"1px solid #F1F5F9",
+                  background:i%2===0?"#fff":"#FAFAFA"}},
+                  React.createElement("td",{style:{padding:"11px 16px",fontFamily:"'DM Mono',monospace",
+                    fontSize:11,fontWeight:700,color:"#6F4AE1",whiteSpace:"nowrap"}},r["Ref No"]||"—"),
+                  React.createElement("td",{style:{padding:"11px 16px",fontSize:13,fontWeight:700,color:"#0F172A"}},r["Full Name"]||"—"),
+                  React.createElement("td",{style:{padding:"11px 16px",fontSize:13,fontWeight:700}},r["Grade"]||"—"),
+                  React.createElement("td",{style:{padding:"11px 16px",fontSize:12,color:"#475569"}},r["Place"]||"—"),
+                  React.createElement("td",{style:{padding:"11px 16px",fontSize:11,color:"#64748B",fontFamily:"'DM Mono',monospace"}},r["Phone"]||"—"),
+                  React.createElement("td",{style:{padding:"11px 16px",fontSize:11,color:"#94A3B8",fontFamily:"'DM Mono',monospace",whiteSpace:"nowrap"}},date),
+                  React.createElement("td",{style:{padding:"11px 16px"}},
+                    React.createElement("div",{style:{display:"flex",alignItems:"center",gap:8}},
+                      React.createElement("span",{style:{fontFamily:"'DM Mono',monospace",fontSize:14,
+                        fontWeight:900,color:gTag.color}},sc.gpi),
+                      React.createElement(Tag,{pctVal:sc.gpi})
+                    )
+                  ),
+                  React.createElement("td",{style:{padding:"11px 16px"}},
+                    React.createElement("span",{style:{background:scol.bg,color:scol.text,
+                      border:`1px solid ${scol.border}`,padding:"3px 10px",borderRadius:4,
+                      fontSize:10,fontWeight:800,fontFamily:"'DM Mono',monospace"}},status)
+                  ),
+                  React.createElement("td",{style:{padding:"11px 16px"}},
+                    React.createElement("button",{onClick:()=>setOpenRec(r),
+                      style:{padding:"6px 14px",borderRadius:6,border:"1px solid #E2E8F0",
+                        background:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",
+                        color:"#475569",whiteSpace:"nowrap"}},"Audit Report →")
+                  )
+                );
+              })
+            )
+          )
+        )
+      )
+    ),
+
+    // Quick status drawer
+    openRec&&!openRec._audit&&React.createElement("div",{
+      onClick:e=>e.target===e.currentTarget&&setOpenRec(null),
+      style:{position:"fixed",inset:0,background:"rgba(15,23,42,0.6)",zIndex:100,
+        display:"flex",alignItems:"flex-end",justifyContent:"center"}},
+      React.createElement("div",{style:{background:"#fff",borderRadius:"12px 12px 0 0",width:"100%",
+        maxWidth:600,padding:"24px 24px 36px",boxShadow:"0 -16px 50px rgba(0,0,0,0.2)"}},
+        React.createElement("div",{style:{width:36,height:4,background:"#E2E8F0",borderRadius:2,margin:"0 auto 20px"}}),
+        React.createElement("div",{style:{display:"flex",justifyContent:"space-between",
+          alignItems:"flex-start",marginBottom:20}},
+          React.createElement("div",null,
+            React.createElement("div",{style:{fontSize:18,fontWeight:800,color:"#0F172A"}},openRec["Full Name"]||"—"),
+            React.createElement("div",{style:{fontSize:11,color:"#6F4AE1",fontFamily:"'DM Mono',monospace",fontWeight:700,marginTop:2}},openRec["Ref No"]||"—")
+          ),
+          React.createElement("button",{onClick:()=>setOpenRec({...openRec,_audit:true}),
+            style:{padding:"8px 16px",border:"none",background:"#0F172A",color:"#fff",
+              borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer"}},"View Full Audit →")
+        ),
+        React.createElement("div",{style:{fontSize:10,fontWeight:800,color:"#94A3B8",letterSpacing:"0.08em",
+          textTransform:"uppercase",marginBottom:10,fontFamily:"'DM Mono',monospace"}},"Update Status"),
+        React.createElement("div",{style:{display:"flex",gap:8,flexWrap:"wrap",marginBottom:18}},
+          ["Pending","Reviewed","Shortlisted","Enrolled","Rejected"].map(s=>{
+            const active=openRec["Status"]===s,sc=SC[s];
+            return React.createElement("button",{key:s,onClick:()=>updateStatus(openRec["Ref No"],s),
+              style:{padding:"9px 18px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:800,
+                border:`1.5px solid ${active?sc.text:sc.border}`,
+                background:active?sc.bg:"#fff",color:sc.text}},s);
+          })
+        ),
+        React.createElement("button",{onClick:()=>deleteRec(openRec["Ref No"]),
+          style:{width:"100%",padding:11,border:"1px solid #FECACA",borderRadius:6,
+            background:"#FEF2F2",color:"#DC2626",fontSize:12,fontWeight:700,cursor:"pointer"}},
+          "🗑 Delete Record")
+      )
+    ),
+
+    // Full audit report
+    openRec&&openRec._audit&&React.createElement(AuditReport,{record:openRec,
+      onClose:()=>setOpenRec({...openRec,_audit:false})})
+  );
+}
+
+createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+
+<style>
+@media print {
+  body { background: white !important; }
+  .no-print { display: none !important; }
+}
+</style>
+</body>
+</html>
