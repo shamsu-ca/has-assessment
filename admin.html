@@ -43,7 +43,7 @@ import {
 // ║  REQUIRED: paste your GAS Web App URL below                  ║
 // ║  Extensions → Apps Script → Deploy → Web App → Copy URL     ║
 // ╚══════════════════════════════════════════════════════════════╝
-const API_URL = "https://script.googleusercontent.com/macros/echo?user_content_key=AUkAhnS80FqxhBGrI0jRhV4qhN4D18PQ7SpZpRqA14X_kcfOkpZVafZRqrA4oSvZU_ubzImfNbAm7lTZmKbuWFfkl_V102nO-24HIo3p26ppHGydvOCih2f_W40cKLlbd_AXt47gYYre0FDhafpV_bn6q0xZIqPctiHwnmYjdNZXQ9jPsrnQziXm6AXjcCmdYob4HQ_XZWMElMi_bq4P5wXpSlPePbgO3bMrTKNgKoiMOnvuDDyOBTtRuRD1T7Xo2LelbW07GRMYbvEZy77KsXB3wgE5_1lNiA&lib=M57CKBJ4rTSHrcig6Qj6PbmUP4ktCuX3R";
+const API_URL = "https://script.google.com/macros/s/AKfycbzQIEAFs1gWtUaFd1bzZwvQj-r4qgmSEvHlp5Bu80ST36LBzjIj-5vd8TIrOFRxorOlYg/exec";
 
 const WEIGHTS = { language:0.25, math:0.20, reasoning:0.15, dikr:0.10, quran:0.15, behaviour:0.15 };
 
@@ -120,21 +120,23 @@ const generateNarrative = (r, scores) => {
   ];
 };
 
-const api = body =>
-  fetch(API_URL, {
+const api = body => {
+  return fetch(API_URL, {
     method: "POST",
     redirect: "follow",
     headers: { "Content-Type": "text/plain;charset=utf-8" },
     body: JSON.stringify(body),
   })
   .then(r => {
+    if (!r.ok) throw new Error("HTTP " + r.status + " — check GAS deployment is set to Anyone");
     const ct = r.headers.get("content-type") || "";
     if (ct.includes("json")) return r.json();
     return r.text().then(t => {
       try { return JSON.parse(t); }
-      catch(_) { throw new Error("Bad response: " + t.slice(0, 120)); }
+      catch(_) { throw new Error("Non-JSON: " + t.slice(0, 200)); }
     });
   });
+};
 
 // ── SHARED COMPONENTS ─────────────────────────────────────────────
 const Tag = ({pctVal,size="sm"}) => {
@@ -793,16 +795,7 @@ function App() {
   );
 }
 
-// Runtime guard
-if(API_URL.includes("AKfycbzQIEAFs1gWtUaFd1bzZwvQj-r4qgmSEvHlp5Bu80ST36LBzjIj-5vd8TIrOFRxorOlYg")){
-  document.getElementById("root").innerHTML =
-    '<div style="min-height:100vh;background:#0F172A;display:flex;align-items:center;justify-content:center;padding:24px">' +
-    '<div style="background:#EF4444;color:#fff;border-radius:12px;padding:28px 32px;max-width:480px;text-align:center;font-family:monospace">' +
-    '<div style="font-size:32px;margin-bottom:12px">⚠</div>' +
-    '<div style="font-size:16px;font-weight:700;margin-bottom:8px">API_URL not configured</div>' +
-    '<div style="font-size:13px;opacity:0.9">Open admin.html and replace<br><code>YOUR_DEPLOYMENT_ID</code><br>with your Google Apps Script Web App URL</div>' +
-    '</div></div>';
-} else {
+
   createRoot(document.getElementById("root")).render(React.createElement(App));
 }
 </script>
