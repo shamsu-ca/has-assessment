@@ -389,10 +389,11 @@ tbody td{padding:11px 14px;vertical-align:middle;color:var(--text);font-weight:5
 //  CONFIG — paste your GAS Web App URL here
 // ════════════════════════════════════════════════
 // ╔══════════════════════════════════════════════════════════════╗
-// ║  REQUIRED: paste your GAS Web App URL below                  ║
-// ║  Extensions → Apps Script → Deploy → Web App → Copy URL     ║
+// ║  GAS Web App URL — paste the /exec URL from:                 ║
+// ║  Apps Script → Deploy → Manage Deployments → copy URL       ║
+// ║  It looks like: https://script.google.com/macros/s/AKf.../exec
 // ╚══════════════════════════════════════════════════════════════╝
-var API_URL = "https://script.googleusercontent.com/macros/echo?user_content_key=AUkAhnS80FqxhBGrI0jRhV4qhN4D18PQ7SpZpRqA14X_kcfOkpZVafZRqrA4oSvZU_ubzImfNbAm7lTZmKbuWFfkl_V102nO-24HIo3p26ppHGydvOCih2f_W40cKLlbd_AXt47gYYre0FDhafpV_bn6q0xZIqPctiHwnmYjdNZXQ9jPsrnQziXm6AXjcCmdYob4HQ_XZWMElMi_bq4P5wXpSlPePbgO3bMrTKNgKoiMOnvuDDyOBTtRuRD1T7Xo2LelbW07GRMYbvEZy77KsXB3wgE5_1lNiA&lib=M57CKBJ4rTSHrcig6Qj6PbmUP4ktCuX3R";
+var API_URL = "https://script.google.com/macros/s/AKfycbzQIEAFs1gWtUaFd1bzZwvQj-r4qgmSEvHlp5Bu80ST36LBzjIj-5vd8TIrOFRxorOlYg/exec";
 
 // ════════════════════════════════════════════════
 //  VIEW ROUTER
@@ -439,13 +440,6 @@ function buildBeh(){var c=document.getElementById("beh-list");c.innerHTML="";BF.
 //  INIT
 // ════════════════════════════════════════════════
 document.addEventListener("DOMContentLoaded",function(){
-  // Guard: warn if API_URL was never configured
-  if(API_URL.indexOf("AKfycbzQIEAFs1gWtUaFd1bzZwvQj-r4qgmSEvHlp5Bu80ST36LBzjIj-5vd8TIrOFRxorOlYg")>-1){
-    var w=document.createElement("div");
-    w.style.cssText="position:fixed;top:0;left:0;right:0;z-index:9999;background:#EF4444;color:#fff;padding:14px 20px;font-size:13px;font-weight:700;text-align:center;font-family:monospace";
-    w.textContent="⚠ API_URL not configured — open index.html and replace YOUR_DEPLOYMENT_ID with your GAS Web App URL";
-    document.body.prepend(w);
-  }
   document.getElementById("dob").max=new Date().toISOString().split("T")[0];
   buildLang("lang-english","eng");buildLang("lang-arabic","ar");buildLang("lang-malayalam","ml");
   buildRW("rw-math",MATH,"math");buildRW("rw-reasoning",RSN,"rsn");
@@ -630,7 +624,6 @@ function deleteRecord(){
 
 // ════════════════════════════════════════════════
 //  API HELPER
-//  GAS needs text/plain + redirect:follow
 // ════════════════════════════════════════════════
 function api(body){
   return fetch(API_URL,{
@@ -640,11 +633,12 @@ function api(body){
     body:JSON.stringify(body)
   })
   .then(function(r){
+    if(!r.ok)throw new Error("HTTP "+r.status+" — check GAS deployment is set to 'Anyone'");
     var ct=r.headers.get("content-type")||"";
-    if(ct.indexOf("json")>-1) return r.json();
+    if(ct.indexOf("json")>-1)return r.json();
     return r.text().then(function(t){
       try{return JSON.parse(t);}
-      catch(_){throw new Error("Bad response: "+t.slice(0,120));}
+      catch(_){throw new Error("Non-JSON response: "+t.slice(0,200));}
     });
   });
 }
